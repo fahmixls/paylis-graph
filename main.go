@@ -2,70 +2,55 @@ package main
 
 import (
 	"context"
-	"log"
-	"net/http"
+	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
-
-	"github.com/joho/godotenv"
 )
 
 func main() {
-	_ = godotenv.Load()
-	config := loadConfig()
+	fmt.Println("🚀 Ethereum Transaction Pooler Starting...")
 
-	listener, err := NewEventListener(config)
+	// Load configuration
+	config, err := LoadConfig("config/config.yaml")
 	if err != nil {
-		log.Fatalf("Failed to create event listener: %v", err)
+		fmt.Printf("❌ Failed to load configuration: %v\n", err)
+		os.Exit(1)
 	}
-	defer listener.Close()
 
+	// Create processor
+	processor, err := NewTransactionProcessor(config)
+	if err != nil {
+		fmt.Printf("❌ Failed to create processor: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	// Initialize processor
+	if err := processor.Initialize(ctx); err != nil {
+		fmt.Printf("❌ Failed to initialize processor: %v\n", err)
+		os.Exit(1)
+	}
 
-	var wg sync.WaitGroup
+	// Handle graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start HTTP server
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		mux := http.NewServeMux()
-		mux.HandleFunc("/events", listener.handleSSE)
-		mux.HandleFunc("/health", listener.handleHealth)
-
-		server := &http.Server{
-			Addr:    ":" + config.ServerPort,
-			Handler: mux,
-		}
-
-		go func() {
-			log.Printf("HTTP server running on port %s", config.ServerPort)
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("HTTP server error: %v", err)
-			}
-		}()
-
-		<-ctx.Done()
-		server.Shutdown(context.Background())
+		sig := <-sigChan
+		fmt.Printf("\n📡 Received signal %v, shutting down gracefully...\n", sig)
+		cancel()
+		processor.Stop()
 	}()
 
-	// Start listener
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := listener.Start(ctx); err != nil {
-			log.Printf("Listener error: %v", err)
-		}
-	}()
+	// Start processing
+	if err := processor.Start(ctx); err != nil && err != context.Canceled {
+		fmt.Printf("❌ Processor error: %v\n", err)
+		os.Exit(1)
+	}
 
-	<-sig
-	log.Println("Signal received, shutting down...")
-	cancel()
-	wg.Wait()
-	log.Println("Shutdown complete.")
+	fmt.Println("✅ Shutdown complete")
 }

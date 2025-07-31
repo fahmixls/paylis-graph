@@ -1,45 +1,70 @@
 package main
 
 import (
+	"fmt"
 	"os"
-	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
-	DatabaseURL    string
-	EthereumRPC    string
-	TokenAddresses []string
-	ChainID        int64
-	ServerPort     string
-}
-
-func loadConfig() *Config {
-	return &Config{
-		DatabaseURL: getEnv("DATABASE_URL", "postgres://user:password@localhost/dbname?sslmode=disable"),
-		EthereumRPC: getEnv("ETHEREUM_RPC", "wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID"),
-		TokenAddresses: strings.Split(
-			getEnv("TOKEN_ADDRESSES", "0xA0b86a33E6441ecDe3E3a7Bd5bCa2e5FE8e30E5B,0xdAC17F958D2ee523a2206206994597C13D831ec7"),
-			",",
-		),
-		ChainID:    parseInt64(getEnv("CHAIN_ID", "1")),
-		ServerPort: getEnv("SERVER_PORT", "8080"),
+func LoadConfig(configPath string) (*Config, error) {
+	if configPath == "" {
+		configPath = "config.yaml"
 	}
-}
 
-func getEnv(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
-	return defaultVal
-}
 
-func parseInt64(val string) int64 {
-	switch val {
-	case "1":
-		return 1
-	case "137":
-		return 137
-	default:
-		return 1
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	// Validate required fields
+	if config.RPC == "" {
+		return nil, fmt.Errorf("RPC URL is required")
+	}
+	if config.DB == "" {
+		return nil, fmt.Errorf("database connection string is required")
+	}
+	if len(config.Tokens) == 0 {
+		return nil, fmt.Errorf("at least one token configuration is required")
+	}
+
+	// Set defaults
+	if config.From == 0 {
+		config.From = 0
+	}
+	if config.Conf == 0 {
+		config.Conf = 1
+	}
+	if config.Batch == 0 {
+		config.Batch = 100
+	}
+
+	// Validate tokens
+	for i, token := range config.Tokens {
+		if token.Address == "" || token.Symbol == "" {
+			return nil, fmt.Errorf("token %d: address and symbol are required", i)
+		}
+	}
+
+	fmt.Println("Configuration loaded successfully")
+	fmt.Printf("- RPC: %s\n", config.RPC)
+	fmt.Println("- Database: Connected")
+	fmt.Printf("- From block: %d\n", config.From)
+	fmt.Printf("- Confirmations: %d\n", config.Conf)
+	fmt.Printf("- Batch size: %d\n", config.Batch)
+	fmt.Print("- Tokens: ")
+	for i, token := range config.Tokens {
+		if i > 0 {
+			fmt.Print(", ")
+		}
+		fmt.Print(token.Symbol)
+	}
+	fmt.Println()
+
+	return &config, nil
 }

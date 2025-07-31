@@ -1,2 +1,4 @@
 .env
+config/config.yaml
+config/config.yml
 build/*
